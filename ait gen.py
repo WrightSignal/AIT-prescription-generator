@@ -291,6 +291,88 @@ def load_patient():
     load_button.pack(pady=10)
 
 
+def calculate_vials(selected_allergens):
+    """Calculates vial assignments based on allergen compatibility and volumes.
+    
+    Returns a list of Vial objects with allergens assigned.
+    """
+    if not selected_allergens:
+        return []
+    
+    # Get allergen data for selected allergens
+    allergen_data_list = []
+    for allergen_name in selected_allergens:
+        allergen_data = next((a for a in ALLERGENS if a["name"] == allergen_name), None)
+        if allergen_data:
+            allergen_data_list.append(allergen_data)
+    
+    # Group allergens by compatibility
+    # Mold must be separate from Tree, Grass, Weed, Other
+    # Other (animals/insects) must be separate from Tree, Grass, Weed, Mold
+    # Tree, Grass, Weed can be mixed together
+    # Venom is always separate (each venom in its own vial typically)
+    
+    groups = {
+        "Mold": [],
+        "Pollen": [],  # Tree, Grass, Weed combined
+        "Other": [],
+        "Venom": []
+    }
+    
+    for allergen_data in allergen_data_list:
+        group = allergen_data["group"]
+        if group == "Mold":
+            groups["Mold"].append(allergen_data)
+        elif group in ["Tree", "Grass", "Weed"]:
+            groups["Pollen"].append(allergen_data)
+        elif group == "Other":
+            groups["Other"].append(allergen_data)
+        elif group == "Venom":
+            groups["Venom"].append(allergen_data)
+    
+    vials = []
+    vial_number = 1
+    
+    # Process each compatibility group
+    for group_name, allergens in groups.items():
+        if not allergens:
+            continue
+        
+        # For venom, each allergen gets its own vial
+        if group_name == "Venom":
+            for allergen_data in allergens:
+                vial = Vial(f"Vial {vial_number} ({group_name})")
+                vial.add_allergen(allergen_data["name"], allergen_data["min_volume"])
+                vials.append(vial)
+                vial_number += 1
+        else:
+            # For other groups, pack allergens into vials up to 5mL
+            current_vial = Vial(f"Vial {vial_number} ({group_name})")
+            
+            for allergen_data in allergens:
+                volume = allergen_data["min_volume"]
+                
+                # Check if allergen fits in current vial
+                if current_vial.current_volume + volume <= 5.0:
+                    current_vial.allergens[allergen_data["name"]] = volume
+                    current_vial.current_volume += volume
+                else:
+                    # Save current vial and start a new one
+                    if current_vial.allergens:
+                        vials.append(current_vial)
+                        vial_number += 1
+                    current_vial = Vial(f"Vial {vial_number} ({group_name})")
+                    current_vial.allergens[allergen_data["name"]] = volume
+                    current_vial.current_volume += volume
+            
+            # Don't forget to add the last vial
+            if current_vial.allergens:
+                vials.append(current_vial)
+                vial_number += 1
+    
+    return vials
+
+
 def generate_prescription():
     """Generates the prescription text."""
     mode = vial_type_var.get()
@@ -345,13 +427,31 @@ def generate_prescription():
     prescription_text += f"City: {city}, {state}\n"
     prescription_text += f"Phone: {phone}\n"
     prescription_text += f"Vial Type: {mode}\n"
-    prescription_text += "Allergens:\n"
+    prescription_text += "-" * 40 + "\n"
 
     if not selected_allergens:
         prescription_text += "  (No allergens selected)\n"
     else:
-        for allergen in selected_allergens:
-            prescription_text += f"  - {allergen}\n"
+        # Calculate vial assignments
+        vials = calculate_vials(selected_allergens)
+        
+        prescription_text += f"VIAL FORMULATIONS ({len(vials)} vial(s) total):\n"
+        prescription_text += "-" * 40 + "\n"
+        
+        for vial in vials:
+            prescription_text += f"\n{vial.label}:\n"
+            prescription_text += "  Stock Extracts:\n"
+            
+            total_extract = 0.0
+            for allergen_name, volume in vial.allergens.items():
+                prescription_text += f"    • {allergen_name}: {volume:.2f} mL\n"
+                total_extract += volume
+            
+            diluent_volume = vial.remaining_volume()
+            prescription_text += f"  ─────────────────────\n"
+            prescription_text += f"  Total Stock Extract: {total_extract:.2f} mL\n"
+            prescription_text += f"  Diluent (HSA): {diluent_volume:.2f} mL\n"
+            prescription_text += f"  Final Vial Volume: 5.00 mL\n"
 
     result_label.config(text=prescription_text)
 
@@ -398,102 +498,184 @@ def clear_fields():
 
 # --- Main Application Window ---
 root = tk.Tk()
-root.title("Allergy Shot Vial Prescription Generator")
-# --- Canvas and Scrollbar ---
+root.title("AIT Prescription Generator")
+root.geometry("900x700")
+root.configure(bg="#f0f4f8")
 
-main_frame = ttk.Frame(root)  # Create a main frame
-main_frame.pack(fill=tk.BOTH, expand=1)  # Pack it to fill the window
+# --- Custom Styling ---
+style = ttk.Style()
+style.theme_use('clam')
 
-my_canvas = tk.Canvas(main_frame)  # Canvas within the main_frame
-my_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
+# Define colors
+PRIMARY_COLOR = "#2563eb"  # Blue
+PRIMARY_HOVER = "#1d4ed8"
+SECONDARY_COLOR = "#64748b"  # Slate
+BG_COLOR = "#f8fafc"
+CARD_BG = "#ffffff"
+TEXT_COLOR = "#1e293b"
+ACCENT_COLOR = "#10b981"  # Green for success
 
-my_scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=my_canvas.yview)  # Create scrollbar
-my_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)  # Pack it to the right side.
+# Configure styles
+style.configure("TFrame", background=BG_COLOR)
+style.configure("Card.TFrame", background=CARD_BG, relief="flat")
+style.configure("TLabelframe", background=CARD_BG, foreground=TEXT_COLOR, borderwidth=2, relief="groove")
+style.configure("TLabelframe.Label", background=CARD_BG, foreground=PRIMARY_COLOR, font=("Segoe UI", 10, "bold"))
+style.configure("TLabel", background=CARD_BG, foreground=TEXT_COLOR, font=("Segoe UI", 10))
+style.configure("Header.TLabel", background=BG_COLOR, foreground=TEXT_COLOR, font=("Segoe UI", 16, "bold"))
+style.configure("TEntry", font=("Segoe UI", 10), padding=5)
+style.configure("TCheckbutton", background=CARD_BG, foreground=TEXT_COLOR, font=("Segoe UI", 9))
+style.configure("TCombobox", font=("Segoe UI", 10), padding=5)
 
-my_canvas.configure(yscrollcommand=my_scrollbar.set)  # Configure the canvas
-my_canvas.bind('<Configure>', lambda e: my_canvas.configure(scrollregion=my_canvas.bbox("all")))  # bind configure
+# Button styles
+style.configure("Primary.TButton", 
+                background=PRIMARY_COLOR, 
+                foreground="white", 
+                font=("Segoe UI", 10, "bold"),
+                padding=(15, 8))
+style.map("Primary.TButton",
+          background=[("active", PRIMARY_HOVER), ("pressed", PRIMARY_HOVER)])
 
-# --- Second Frame (inside Canvas) ---
-second_frame = ttk.Frame(my_canvas)
-my_canvas.create_window((0, 0), window=second_frame, anchor="nw")  # Add that new frame TO the canvas.
+style.configure("Secondary.TButton",
+                background=SECONDARY_COLOR,
+                foreground="white",
+                font=("Segoe UI", 10),
+                padding=(15, 8))
+style.map("Secondary.TButton",
+          background=[("active", "#475569"), ("pressed", "#475569")])
 
-# --- Patient Information ---
-patient_info_frame = ttk.LabelFrame(second_frame, text="Patient Information")  # Put it in second_frame
-patient_info_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")  # Grid it.
+style.configure("Accent.TButton",
+                background=ACCENT_COLOR,
+                foreground="white",
+                font=("Segoe UI", 10, "bold"),
+                padding=(15, 8))
+
+# --- Main Container with Scrollbar ---
+main_frame = ttk.Frame(root, style="TFrame")
+main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+my_canvas = tk.Canvas(main_frame, bg=BG_COLOR, highlightthickness=0)
+my_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+my_scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=my_canvas.yview)
+my_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+my_canvas.configure(yscrollcommand=my_scrollbar.set)
+my_canvas.bind('<Configure>', lambda e: my_canvas.configure(scrollregion=my_canvas.bbox("all")))
+
+# Mouse wheel scrolling
+def _on_mousewheel(event):
+    my_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+my_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+# --- Content Frame ---
+second_frame = ttk.Frame(my_canvas, style="TFrame")
+my_canvas.create_window((0, 0), window=second_frame, anchor="nw")
+
+# --- Header ---
+header_frame = ttk.Frame(second_frame, style="TFrame")
+header_frame.grid(row=0, column=0, columnspan=2, pady=(0, 15), sticky="ew")
+
+header_label = ttk.Label(header_frame, text="🩺 AIT Prescription Generator", style="Header.TLabel")
+header_label.pack(side=tk.LEFT)
+
+# --- Two Column Layout ---
+left_column = ttk.Frame(second_frame, style="TFrame")
+left_column.grid(row=1, column=0, padx=(0, 10), sticky="nsew")
+
+right_column = ttk.Frame(second_frame, style="TFrame")
+right_column.grid(row=1, column=1, padx=(10, 0), sticky="nsew")
+
+# --- Patient Information Card ---
+patient_info_frame = ttk.LabelFrame(left_column, text="  Patient Information  ", padding=(15, 10))
+patient_info_frame.grid(row=0, column=0, pady=(0, 10), sticky="ew")
+
+# Configure grid weights for patient info
+patient_info_frame.columnconfigure(1, weight=1)
 
 # Patient Name
 patient_name_label = ttk.Label(patient_info_frame, text="Patient Name:")
-patient_name_label.grid(row=0, column=0, padx=5, pady=5, sticky="w")
-patient_name_entry = ttk.Entry(patient_info_frame)
-patient_name_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+patient_name_label.grid(row=0, column=0, padx=(0, 10), pady=8, sticky="w")
+patient_name_entry = ttk.Entry(patient_info_frame, width=30)
+patient_name_entry.grid(row=0, column=1, pady=8, sticky="ew")
 
 # Date of Birth
 dob_label = ttk.Label(patient_info_frame, text="Date of Birth:")
-dob_label.grid(row=1, column=0, padx=5, pady=5, sticky="w")
-dob_entry = DateEntry(patient_info_frame, width=12, background='darkblue', foreground='white',
-                      borderwidth=2, date_pattern='m-d-Y')
-dob_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+dob_label.grid(row=1, column=0, padx=(0, 10), pady=8, sticky="w")
+dob_entry = DateEntry(patient_info_frame, width=18, background=PRIMARY_COLOR, foreground='white',
+                      borderwidth=2, date_pattern='m-d-Y', font=("Segoe UI", 10))
+dob_entry.grid(row=1, column=1, pady=8, sticky="w")
 
 # Medical Record Number
 mrn_label = ttk.Label(patient_info_frame, text="MRN:")
-mrn_label.grid(row=2, column=0, padx=5, pady=5, sticky="w")
-mrn_entry = ttk.Entry(patient_info_frame)
-mrn_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+mrn_label.grid(row=2, column=0, padx=(0, 10), pady=8, sticky="w")
+mrn_entry = ttk.Entry(patient_info_frame, width=30)
+mrn_entry.grid(row=2, column=1, pady=8, sticky="ew")
 
 # Street Address
 address_label = ttk.Label(patient_info_frame, text="Street Address:")
-address_label.grid(row=3, column=0, padx=5, pady=5, sticky="w")
-address_entry = ttk.Entry(patient_info_frame)
-address_entry.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
+address_label.grid(row=3, column=0, padx=(0, 10), pady=8, sticky="w")
+address_entry = ttk.Entry(patient_info_frame, width=30)
+address_entry.grid(row=3, column=1, pady=8, sticky="ew")
 
-# City
-city_label = ttk.Label(patient_info_frame, text="City:")
-city_label.grid(row=4, column=0, padx=5, pady=5, sticky="w")
-city_entry = ttk.Entry(patient_info_frame)
-city_entry.grid(row=4, column=1, padx=5, pady=5, sticky="ew")
+# City and State in one row
+city_state_frame = ttk.Frame(patient_info_frame)
+city_state_frame.grid(row=4, column=0, columnspan=2, pady=8, sticky="ew")
 
-# State
-state_label = ttk.Label(patient_info_frame, text="State:")
-state_label.grid(row=5, column=0, padx=5, pady=5, sticky="w")
-state_entry = ttk.Entry(patient_info_frame)
-state_entry.grid(row=5, column=1, padx=5, pady=5, sticky="ew")
+city_label = ttk.Label(city_state_frame, text="City:")
+city_label.grid(row=0, column=0, padx=(0, 10), sticky="w")
+city_entry = ttk.Entry(city_state_frame, width=20)
+city_entry.grid(row=0, column=1, padx=(0, 15), sticky="w")
+
+state_label = ttk.Label(city_state_frame, text="State:")
+state_label.grid(row=0, column=2, padx=(0, 10), sticky="w")
+state_entry = ttk.Entry(city_state_frame, width=8)
+state_entry.grid(row=0, column=3, sticky="w")
 
 # Phone Number
 phone_label = ttk.Label(patient_info_frame, text="Phone Number:")
-phone_label.grid(row=6, column=0, padx=5, pady=5, sticky="w")
-phone_entry = ttk.Entry(patient_info_frame)
-phone_entry.grid(row=6, column=1, padx=5, pady=5, sticky="ew")
+phone_label.grid(row=5, column=0, padx=(0, 10), pady=8, sticky="w")
+phone_entry = ttk.Entry(patient_info_frame, width=30)
+phone_entry.grid(row=5, column=1, pady=8, sticky="ew")
 
-# --- Vial Type Selection and Load Patient Button---
-vial_type_label = ttk.Label(second_frame, text="Vial Type:")  # Put in second_frame
-vial_type_label.grid(row=1, column=0, padx=5, pady=5, sticky="w")
+# --- Vial Type Selection ---
+vial_selection_frame = ttk.LabelFrame(left_column, text="  Vial Configuration  ", padding=(15, 10))
+vial_selection_frame.grid(row=1, column=0, pady=10, sticky="ew")
+
+vial_type_label = ttk.Label(vial_selection_frame, text="Vial Type:")
+vial_type_label.grid(row=0, column=0, padx=(0, 10), pady=8, sticky="w")
 vial_type_var = tk.StringVar(value="Environmental")
 vial_type_var.trace_add("write", update_allergen_options)
 
-vial_type_combo = ttk.Combobox(second_frame, textvariable=vial_type_var,  # Put in second_frame
-                               values=["Environmental", "Venom"])
-vial_type_combo.grid(row=1, column=0, padx=5, pady=5)  # Grid in row 1, column 0
+vial_type_combo = ttk.Combobox(vial_selection_frame, textvariable=vial_type_var,
+                               values=["Environmental", "Venom"], width=18, state="readonly")
+vial_type_combo.grid(row=0, column=1, pady=8, sticky="w")
 
-load_patient_button = ttk.Button(second_frame, text="Load Patient", command=load_patient)  # Put in second_frame
-load_patient_button.grid(row=1, column=0, padx=5, pady=5, sticky="e")  # Grid, sticky to east
-# --- Environmental Allergen Checkboxes ---
+load_patient_button = ttk.Button(vial_selection_frame, text="📂 Load Patient", 
+                                  command=load_patient, style="Secondary.TButton")
+load_patient_button.grid(row=0, column=2, padx=(20, 0), pady=8, sticky="e")
+
+# --- Allergen Selection Area ---
+allergen_container = ttk.LabelFrame(left_column, text="  Allergen Selection  ", padding=(15, 10))
+allergen_container.grid(row=2, column=0, pady=10, sticky="ew")
+
+# Environmental Allergen Checkboxes
 environmental_allergen_frames = []
 environmental_allergen_vars = {}
 
 # --- Mold Group ---
-mold_frame = ttk.LabelFrame(second_frame, text="Mold")  # second_frame
-mold_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")  # Adjusted row
+mold_frame = ttk.LabelFrame(allergen_container, text="  Mold  ", padding=(10, 5))
+mold_frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
 environmental_allergen_frames.append(mold_frame)
 mold_allergens = ["Aspergillus", "Alternaria", "Cladosporium", "Penicillium"]
 for i, allergen in enumerate(mold_allergens):
     var = tk.BooleanVar()
     environmental_allergen_vars[allergen] = var
     checkbox = ttk.Checkbutton(mold_frame, text=allergen, variable=var)
-    checkbox.grid(row=i // 2, column=i % 2, padx=5, pady=2, sticky="w")  # No changes here.
+    checkbox.grid(row=i // 2, column=i % 2, padx=10, pady=4, sticky="w")
 
 # --- Tree Group ---
-tree_frame = ttk.LabelFrame(second_frame, text="Tree")  # second_frame
-tree_frame.grid(row=3, column=0, padx=5, pady=5, sticky="ew")  # Adjusted row
+tree_frame = ttk.LabelFrame(allergen_container, text="  Tree  ", padding=(10, 5))
+tree_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
 environmental_allergen_frames.append(tree_frame)
 tree_allergens = ["Ash", "Birch (Oak)", "Cedar", "Hackberry (Elm)", "Maple", "Sycamore", "Walnut (Pecan)",
                   "Willow (Cottonwood)", "Mulberry"]
@@ -501,22 +683,22 @@ for i, allergen in enumerate(tree_allergens):
     var = tk.BooleanVar()
     environmental_allergen_vars[allergen] = var
     checkbox = ttk.Checkbutton(tree_frame, text=allergen, variable=var)
-    checkbox.grid(row=i // 2, column=i % 2, padx=5, pady=2, sticky="w")
+    checkbox.grid(row=i // 3, column=i % 3, padx=10, pady=4, sticky="w")
 
 # --- Grass Group ---
-grass_frame = ttk.LabelFrame(second_frame, text="Grass")  # second_frame
-grass_frame.grid(row=4, column=0, padx=5, pady=5, sticky="ew")  # Adjusted row
+grass_frame = ttk.LabelFrame(allergen_container, text="  Grass  ", padding=(10, 5))
+grass_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
 environmental_allergen_frames.append(grass_frame)
 grass_allergens = ["Timothy", "Johnson", "Bermuda"]
 for i, allergen in enumerate(grass_allergens):
     var = tk.BooleanVar()
     environmental_allergen_vars[allergen] = var
     checkbox = ttk.Checkbutton(grass_frame, text=allergen, variable=var)
-    checkbox.grid(row=i // 2, column=i % 2, padx=5, pady=2, sticky="w")
+    checkbox.grid(row=0, column=i, padx=10, pady=4, sticky="w")
 
 # --- Weed Group ---
-weed_frame = ttk.LabelFrame(second_frame, text="Weed")  # second_frame
-weed_frame.grid(row=5, column=0, padx=5, pady=5, sticky="ew")  # Adjusted row
+weed_frame = ttk.LabelFrame(allergen_container, text="  Weed  ", padding=(10, 5))
+weed_frame.grid(row=3, column=0, padx=5, pady=5, sticky="ew")
 environmental_allergen_frames.append(weed_frame)
 weed_allergens = ["Cocklebur", "Yellow Dock (Sheep Sorrel)", "Kochia (Firebush)", "Lamb's Quarter", "Mugwort",
                   "Pigweed", "English Plantain", "Russian Thistle", "Ragweed"]
@@ -524,11 +706,11 @@ for i, allergen in enumerate(weed_allergens):
     var = tk.BooleanVar()
     environmental_allergen_vars[allergen] = var
     checkbox = ttk.Checkbutton(weed_frame, text=allergen, variable=var)
-    checkbox.grid(row=i // 2, column=i % 2, padx=5, pady=2, sticky="w")
+    checkbox.grid(row=i // 3, column=i % 3, padx=10, pady=4, sticky="w")
 
 # --- Other Group ---
-other_frame = ttk.LabelFrame(second_frame, text="Other")  # second_frame
-other_frame.grid(row=6, column=0, padx=5, pady=5, sticky="ew")  # Adjusted row
+other_frame = ttk.LabelFrame(allergen_container, text="  Other (Animals/Insects)  ", padding=(10, 5))
+other_frame.grid(row=4, column=0, padx=5, pady=5, sticky="ew")
 environmental_allergen_frames.append(other_frame)
 other_allergens = ["Cat", "Dog - UF", "Dog - Epithelium", "Mouse", "Horse", "Amer. Cockroach", "Ger. Cockroach",
                    "Dust Mite Mix"]
@@ -536,11 +718,11 @@ for i, allergen in enumerate(other_allergens):
     var = tk.BooleanVar()
     environmental_allergen_vars[allergen] = var
     checkbox = ttk.Checkbutton(other_frame, text=allergen, variable=var)
-    checkbox.grid(row=i // 2, column=i % 2, padx=5, pady=2, sticky="w")
+    checkbox.grid(row=i // 3, column=i % 3, padx=10, pady=4, sticky="w")
 
 # --- Venom Allergen Checkboxes ---
-venom_allergen_frame = ttk.LabelFrame(second_frame, text="Venom Allergens")  # second_frame
-venom_allergen_frame.grid(row=7, column=0, columnspan=2, padx=5, pady=5, sticky="ew")  # Adjusted row
+venom_allergen_frame = ttk.LabelFrame(allergen_container, text="  Venom Allergens  ", padding=(10, 5))
+venom_allergen_frame.grid(row=5, column=0, padx=5, pady=5, sticky="ew")
 
 venom_allergens = ["Honey Bee", "Yellow Jacket", "Yellow Faced Hornet", "White Faced Hornet", "Wasp"]
 venom_allergen_vars = {}
@@ -550,22 +732,53 @@ for i, allergen in enumerate(venom_allergens):
     var = tk.BooleanVar()
     venom_allergen_vars[allergen] = var
     checkbox = ttk.Checkbutton(venom_allergen_frame, text=allergen, variable=var)
-    checkbox.grid(row=i // 2, column=i % 2, padx=5, pady=2, sticky="w")
+    checkbox.grid(row=i // 3, column=i % 3, padx=10, pady=4, sticky="w")
     venom_allergen_checkboxes.append(checkbox)
 
 # Initially hide venom allergens
 for widget in venom_allergen_frame.winfo_children():
     widget.grid_remove()
 
-# --- Generate, Clear and Load Buttons ---
-generate_button = ttk.Button(second_frame, text="Generate Prescription", command=generate_prescription)  # second_frame
-generate_button.grid(row=8, column=0, padx=5, pady=10, sticky="w")
+# --- Action Buttons ---
+button_frame = ttk.Frame(left_column, style="TFrame")
+button_frame.grid(row=3, column=0, pady=15, sticky="ew")
 
-clear_button = ttk.Button(second_frame, text="Clear Fields", command=clear_fields)  # second_frame
-clear_button.grid(row=8, column=0, padx=5, pady=10, sticky="e")  # Added clear button
+generate_button = ttk.Button(button_frame, text="✨ Generate Prescription", 
+                             command=generate_prescription, style="Primary.TButton")
+generate_button.pack(side=tk.LEFT, padx=(0, 10))
 
-# --- Result Label ---
-result_label = ttk.Label(second_frame, text="", wraplength=600)  # Increased wraplength
-result_label.grid(row=9, column=0, padx=5, pady=5)  # Adjusted row
+clear_button = ttk.Button(button_frame, text="🗑️ Clear Fields", 
+                          command=clear_fields, style="Secondary.TButton")
+clear_button.pack(side=tk.LEFT)
+
+# --- Right Column: Prescription Output ---
+output_frame = ttk.LabelFrame(right_column, text="  Prescription Output  ", padding=(15, 10))
+output_frame.grid(row=0, column=0, sticky="nsew")
+
+# Use a Text widget with better formatting for the output
+result_text = tk.Text(output_frame, wrap=tk.WORD, width=45, height=35, 
+                      font=("Consolas", 10), bg="#f8fafc", fg=TEXT_COLOR,
+                      relief="flat", padx=10, pady=10)
+result_text.pack(fill=tk.BOTH, expand=True)
+result_text.config(state=tk.DISABLED)
+
+# Create a wrapper to update the text widget instead of label
+def update_result_display(text):
+    result_text.config(state=tk.NORMAL)
+    result_text.delete(1.0, tk.END)
+    result_text.insert(tk.END, text)
+    result_text.config(state=tk.DISABLED)
+
+# Replace result_label with a dummy for compatibility
+class ResultLabelWrapper:
+    def config(self, text=""):
+        update_result_display(text)
+
+result_label = ResultLabelWrapper()
+
+# Configure grid weights
+second_frame.columnconfigure(0, weight=1)
+second_frame.columnconfigure(1, weight=1)
+right_column.rowconfigure(0, weight=1)
 
 root.mainloop()
